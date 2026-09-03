@@ -1,6 +1,6 @@
 # digiposte-cli
 
-Command-line tool to back up your **personal Digiposte vault** (La Poste): log
+Command-line tool to back up your **personal [Digiposte](https://www.laposte.fr/digiposte/) vault** (La Poste): log
 in (cached token or browser), then list and download the documents through the
 vault's internal API.
 
@@ -81,7 +81,7 @@ password = "command:pass show digiposte"
 ## Locations (XDG defaults)
 
 | Data | Default path |
-|---|---|
+| --- | --- |
 | Downloaded documents | `~/Documents/digiposte` |
 | Persistent browser profile | `~/.local/share/digiposte-cli/chrome-profile` |
 | Token cache (~1 h) | `~/.local/state/digiposte-cli/token.json` |
