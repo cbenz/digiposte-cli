@@ -1,0 +1,29 @@
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[project]
+name = "digiposte-cli"
+version = "0.1.0"
+description = "Download documents from your personal Digiposte vault"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.40", #
+    "pydantic>=2.7",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.5"]
+
+[tool.basedpyright]
+# Standard mode: keep useful type checking without drowning in the noisy
+# reportAny/reportUnknown* diagnostics that Playwright code and heterogeneous
+# JSON responses would produce.
+typeCheckingMode = "standard"
+
+[tool.ruff]
+line-length = 100
+
+[project.scripts]
+digiposte-cli = "digiposte_cli.cli:main"

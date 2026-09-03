@@ -1,0 +1,46 @@
+# digiposte-cli configuration
+# Generated automatically on first run. Every key is OPTIONAL:
+# uncomment a line (and set a value) to override the built-in default.
+
+[auth]
+# SSO login URL
+# login_url = "https://secure.digiposte.fr/home"
+
+# Automatic credentials pre-fill in the browser. Leave commented for a fully
+# manual login.
+# The password may be produced by ANY shell command on your machine, using the
+# "command:" prefix, e.g.:
+#   password = "command:pass show digiposte"
+#   password = "command:echo -n mypassword"
+# Uncomment and replace the "changeme" placeholders with your credentials:
+# email = "changeme"
+# password = "changeme"
+
+# Run the browser without a window (needs an already authenticated profile;
+# a CAPTCHA cannot be solved headless).
+# headless = false
+
+[playwright]
+# Browser channel. "chrome" = installed Google Chrome (default),
+# "msedge" = Edge, "" or "chromium" = Playwright bundled Chromium.
+# channel = "chrome"
+
+[api]
+# Base URL of the personal vault API
+# base_url = "https://api.digiposte.fr/api/v3"
+# Locations to browse: SAFE = safe box, INBOX = inbox
+# locations = ["SAFE", "INBOX"]
+# Maximum number of documents requested per call
+# max_results = 1000
+
+[log]
+# Logging level: DEBUG, INFO, WARNING, ERROR
+# level = "INFO"
+
+[paths]
+# Documents destination directory (default: ~/Documents/digiposte)
+# download_dir = "~/Documents/digiposte"
+# Persistent browser profile (default: ~/.local/share/digiposte-cli/chrome-profile)
+# profile_dir = "~/.local/share/digiposte-cli/chrome-profile"
+# API token cache, valid ~1 h (default: ~/.local/state/digiposte-cli/token.json)
+# token_cache = "~/.local/state/digiposte-cli/token.json"
