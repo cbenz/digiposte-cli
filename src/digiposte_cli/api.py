@@ -65,22 +65,6 @@ class DigiposteAPI:
 
     # ── Documents ─────────────────────────────────────────────────────
 
-    def _post(self, path: str, payload: dict[str, Any], label: str) -> object:
-        """POST JSON; log the endpoint and return the JSON (or None on error)."""
-        url = f"{self.base_url}{path}"
-        log.info("🔎 %s → POST %s", label, url)
-        resp = self.session.post(url, json=payload)
-        if resp.status_code == 401:
-            log.error(
-                "   🔑 HTTP 401 on %s — token rejected. Run `digiposte-cli login` to refresh it.",
-                url,
-            )
-            return None
-        if resp.status_code != 200:
-            log.warning("   ⚠️  HTTP %s on %s", resp.status_code, url)
-            return None
-        return resp.json()
-
     def _get(self, path: str, label: str) -> object:
         url = f"{self.base_url}{path}"
         log.info("🔎 %s → GET %s", label, url)
@@ -96,80 +80,35 @@ class DigiposteAPI:
             return None
         return resp.json()
 
-    def list_documents(self, folder_id: str = "") -> list[dict[str, Any]]:
-        """Try to list the documents through several candidate endpoints,
-        until one answers 200."""
-        m = self.max_results
-        locations = self.locations
-        candidates: list[tuple[str, dict[str, Any]]] = [
-            (
-                f"/documents/search?max_results={m}&sort=CREATION_DATE&direction=DESC",
-                {
-                    "locations": locations,
-                    **({"folder_id": folder_id} if folder_id else {}),
-                },
-            ),
-            (
-                f"/documents?max_results={m}&sort=CREATION_DATE&direction=DESC",
-                {},
-            ),
-            (
-                "/documents/facet",
-                {"locations": locations},
-            ),
-        ]
-
-        for path, body in candidates:
-            if body:
-                data = self._post(path, body, label="Search documents")
-            else:
-                data = self._get(path, label="Search documents")
-
-            documents = _extract_documents(data) if data is not None else []
-            if documents:
-                log.info("✅ Endpoint kept: %s", path)
-                log.info("📄 %s document(s) found", len(documents))
-                return documents
-            if data is None:
-                continue
-
-            # 200 but empty → try other GET endpoints
-            if not documents:
-                log.info("   (200 response but empty list on %s)", path)
-
-        # Last resort: a few simple GETs
-        for path in ("/folders", "/documents/safe", "/documents/inbox"):
-            data = self._get(path, label="List (fallback)")
-            documents = _extract_documents(data) if data is not None else []
-            if documents:
-                log.info("✅ Endpoint kept: %s", path)
-                log.info("📄 %s document(s) found", len(documents))
-                return documents
-
-        log.warning(
-            "⚠️  No listing endpoint worked. Inspect the browser DevTools "
-            "(Network tab) after login to find the real routes."
-        )
-        return []
-
-    def search_documents(
-        self,
-        locations: list[str] | None = None,
-        folder_id: str = "",
-        max_results: int | None = None,
-        sort: str = "CREATION_DATE",
-        direction: str = "DESC",
-    ) -> list[dict[str, Any]]:
-        """Targeted search (POST /documents/search)."""
-        loc = locations or self.locations
-        m = max_results or self.max_results
-        payload: dict[str, Any] = {"locations": loc}
-        if folder_id:
-            payload["folder_id"] = folder_id
-        url = f"{self.base_url}/documents/search?max_results={m}&sort={sort}&direction={direction}"
-        resp = self.session.post(url, json=payload)
-        resp.raise_for_status()
-        return _extract_documents(resp.json())
+    def list_documents(self) -> list[dict[str, Any]]:
+        """List the documents of each configured location through its own
+        listing route (e.g. GET /documents/safe, /documents/inbox) and merge
+        the results (deduplicated by document id). Each returned document is
+        tagged with its canonical `location` (e.g. "INBOX"), which the sync
+        command uses to mirror the configured locations in the download dir."""
+        documents: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for location in self.locations:
+            # The API identifiers are uppercase ("SAFE", "INBOX"…); the REST
+            # listing path uses their lowercase slug ("/documents/safe"…).
+            data = self._get(f"/documents/{location.lower()}", label=f"List ({location})")
+            found = _extract_documents(data) if data is not None else []
+            for doc in found:
+                doc.setdefault("location", location)
+                doc_id = doc.get("id")
+                key = str(doc_id) if doc_id is not None else repr(doc)
+                if key in seen:
+                    continue
+                seen.add(key)
+                documents.append(doc)
+        if not documents:
+            log.warning(
+                "⚠️  No documents found in the configured locations (%s).",
+                ", ".join(self.locations),
+            )
+        else:
+            log.info("✅ %d document(s) found in %s", len(documents), ", ".join(self.locations))
+        return documents
 
     @staticmethod
     def _safe_filename(doc: dict[str, Any]) -> str:
