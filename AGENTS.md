@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Development rules
+
+- The README.md file is the main entry point for users and developers. It must always be kept up to date with the features of the application.
+
 ## Language
 
 Use **English** for everything written in this repository: code (identifiers,
