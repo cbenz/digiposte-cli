@@ -152,5 +152,7 @@ uv run digiposte-cli --help
 
 ## Technical documentation
 
-See [docs/API.md](docs/API.md) (and the local swagger
-[docs/swagger.json](docs/swagger.json)) for the underlying HTTP API details.
+- [docs/AUTH.md](docs/AUTH.md) — internals of the browser authentication
+  (dedicated Chrome + CDP, and the anti-CAPTCHA pitfalls).
+- [docs/API.md](docs/API.md) (and the local swagger
+  [docs/swagger.json](docs/swagger.json)) — the underlying HTTP API details.
