@@ -23,6 +23,7 @@ def _ensure_http_url(value: str) -> str:
         raise ValueError("must be an absolute http(s) URL")
     return value
 
+
 # ── Configuration file (TOML) ──────────────────────────────────────────
 
 # Locations accepted by the Digiposte API.
@@ -38,6 +39,9 @@ class AuthFile(BaseModel):
     email: str = ""
     password: str = ""
     headless: bool = False
+    # Dedicated Chrome (CDP) is the default auth path; set to false to fall
+    # back to the Playwright-managed profile.
+    use_running_chrome: bool = True
 
     @field_validator("login_url")
     @classmethod
@@ -90,6 +94,7 @@ class PathsFile(BaseModel):
 
     download_dir: str = ""
     profile_dir: str = ""
+    debug_profile_dir: str = ""
     token_cache: str = ""
 
 
@@ -115,11 +120,10 @@ class CliOptions(BaseModel):
 
     config: Path | None = None
     download_dir: str | None = None
-    list_only: bool = False
-    folder_id: str = ""
-    fresh_login: bool = False
     playwright_channel: str | None = None
     headless: bool = False
+    use_running_chrome: bool = False
+    reset: bool = False
     verbose: bool = False
     # CLI flag `--json` is aliased to avoid clashing with BaseModel.json()
     as_json: bool = Field(default=False, validation_alias="json")

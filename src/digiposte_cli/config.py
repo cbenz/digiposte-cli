@@ -77,6 +77,10 @@ class Config:
     password: str = ""
     playwright_channel: str = "chrome"
     headless: bool = False
+    # Dedicated Chrome (own --user-data-dir + CDP) is the DEFAULT auth path:
+    # the legacy Playwright profile is flagged by La Poste's anti-bot. Set it
+    # to False in the config to fall back to that profile.
+    use_running_chrome: bool = True
     # api
     api_base_url: str = "https://api.digiposte.fr/api/v3"
     locations: list[str] | None = None
@@ -86,6 +90,7 @@ class Config:
     # paths (resolved: XDG defaults if absent from the config)
     download_dir: Path | None = None
     profile_dir: Path | None = None
+    debug_profile_dir: Path | None = None
     token_cache: Path | None = None
 
 
@@ -129,6 +134,7 @@ def load_config(path: Path | None = None) -> Config:
     cfg.email = parsed.auth.email
     cfg.password = parsed.auth.password
     cfg.headless = parsed.auth.headless
+    cfg.use_running_chrome = parsed.auth.use_running_chrome
     cfg.playwright_channel = parsed.playwright.channel
     cfg.api_base_url = str(parsed.api.base_url)
     cfg.locations = list(parsed.api.locations)
@@ -137,6 +143,7 @@ def load_config(path: Path | None = None) -> Config:
 
     cfg.download_dir = _resolve_path(parsed.paths.download_dir, paths.download_dir())
     cfg.profile_dir = _resolve_path(parsed.paths.profile_dir, paths.profile_dir())
+    cfg.debug_profile_dir = _resolve_path(parsed.paths.debug_profile_dir, paths.debug_profile_dir())
     cfg.token_cache = _resolve_path(parsed.paths.token_cache, paths.token_cache_path())
 
     return cfg

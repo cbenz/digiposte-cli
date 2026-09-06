@@ -20,6 +20,14 @@
 # a CAPTCHA cannot be solved headless).
 # headless = false
 
+# Anti-CAPTCHA login: digiposte-cli launches its own dedicated Chrome (own
+# --user-data-dir under the state dir, DevTools port 9222) and attaches to it
+# over CDP. The Playwright profile is flagged by La Poste's anti-bot (blank
+# CAPTCHA); a real, human-operated Chrome is not, so the CAPTCHA is solvable
+# and the session is reused silently on later runs.
+# ENABLED BY DEFAULT — set to false to use the legacy Playwright profile.
+# use_running_chrome = false
+
 [playwright]
 # Browser channel. "chrome" = installed Google Chrome (default),
 # "msedge" = Edge, "" or "chromium" = Playwright bundled Chromium.
@@ -29,6 +37,7 @@
 # Base URL of the personal vault API
 # base_url = "https://api.digiposte.fr/api/v3"
 # Locations to browse: SAFE = safe box, INBOX = inbox
+# (uppercase = API identifiers; the listing URLs use their lowercase form)
 # locations = ["SAFE", "INBOX"]
 # Maximum number of documents requested per call
 # max_results = 1000
@@ -44,3 +53,6 @@
 # profile_dir = "~/.local/share/digiposte-cli/chrome-profile"
 # API token cache, valid ~1 h (default: ~/.local/state/digiposte-cli/token.json)
 # token_cache = "~/.local/state/digiposte-cli/token.json"
+# Dedicated Chrome profile used by use_running_chrome
+# (default: ~/.local/state/digiposte-cli/chrome-debug)
+# debug_profile_dir = "~/.local/state/digiposte-cli/chrome-debug"

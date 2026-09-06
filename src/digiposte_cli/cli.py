@@ -2,9 +2,9 @@
 
 Subcommands:
   sync     authenticate then download the documents
-  ls       list the documents without downloading
-  login    force a browser login and refresh the cached token
-  logout   delete the cached token
+  list     list the documents without downloading (alias: ls)
+  login    ensure a valid token (browser login if needed)
+  logout   delete the cached token (--reset wipes the browser sessions too)
   status   show configuration and authentication state
   config   show / initialize the configuration file
 
@@ -16,6 +16,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from digiposte_cli.api import DigiposteAPI
 from digiposte_cli.auth import (
     AuthInfo,
     load_token_cache,
+    login_via_own_chrome,
     manual_login,
     refresh_session_token,
     save_token_cache,
@@ -57,6 +59,10 @@ def _setup_logging(level: str) -> None:
         force=True,
     )
     logging.getLogger("digiposte").setLevel(level)
+    # Playwright drives its Node driver through an asyncio subprocess whose
+    # transport logs raw noise ("execute program …", "… exited with return
+    # code 0") — silence it so the CLI output stays clean.
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 
 def _resolve_secret(value: str) -> str:
@@ -107,6 +113,12 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         help="Playwright browser channel (default: chrome). Empty = bundled Chromium.",
     )
     parser.add_argument(
+        "--use-running-chrome",
+        action="store_true",
+        help="Force the dedicated-Chrome (CDP) login — enabled by default; "
+        "disable it with `use_running_chrome = false` in the config.",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="Run the browser without a window (only if already authenticated)",
@@ -131,37 +143,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_sync = sub.add_parser("sync", parents=[common], help="Authenticate and download documents")
     p_sync.add_argument(
-        "--folder-id", type=str, default="", help="Folder id to download (default: safe root)"
-    )
-    p_sync.add_argument(
         "--download-dir",
         type=str,
         default=None,
         help=f"Destination directory (default: {paths.download_dir()})",
     )
-    p_sync.add_argument(
-        "--fresh-login",
-        action="store_true",
-        help="Force a browser login (ignore the cached token)",
-    )
     p_sync.set_defaults(func=cmd_sync)
 
-    p_ls = sub.add_parser("ls", parents=[common], help="List documents without downloading")
-    p_ls.add_argument(
-        "--folder-id", type=str, default="", help="Folder id to list (default: safe root)"
+    p_list = sub.add_parser(
+        "list",
+        parents=[common],
+        aliases=["ls"],
+        help="List documents without downloading",
     )
-    p_ls.add_argument(
+    p_list.add_argument(
         "--json", action="store_true", help="Output the document list as JSON on stdout"
     )
-    p_ls.set_defaults(func=cmd_ls)
+    p_list.set_defaults(func=cmd_list)
 
     sub.add_parser(
-        "login", parents=[common], help="Force a browser login and cache the token"
+        "login",
+        parents=[common],
+        help="Ensure a valid token (reuse the cache, or log in through a browser)",
     ).set_defaults(func=cmd_login)
 
-    sub.add_parser("logout", parents=[common], help="Delete the cached token").set_defaults(
-        func=cmd_logout
+    p_logout = sub.add_parser("logout", parents=[common], help="Sign out (delete the cached token)")
+    p_logout.add_argument(
+        "--reset",
+        action="store_true",
+        help="Also delete the browser sessions (dedicated Chrome profile) — full sign-out",
     )
+    p_logout.set_defaults(func=cmd_logout)
 
     sub.add_parser(
         "status", parents=[common], help="Show the configuration and authentication state"
@@ -214,44 +226,65 @@ def _bootstrap_paths(opts: CliOptions, cfg: Config) -> dict[str, Any]:
         opts.playwright_channel if opts.playwright_channel is not None else cfg.playwright_channel
     )
     headless = opts.headless or cfg.headless
+    use_running_chrome = opts.use_running_chrome or cfg.use_running_chrome
+    debug_profile_dir = cfg.debug_profile_dir or paths.debug_profile_dir()
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if use_running_chrome:
+        debug_profile_dir.mkdir(parents=True, exist_ok=True)
     return {
         "profile_dir": profile_dir,
         "cache_path": cache_path,
         "download_dir": download_dir,
         "channel": channel,
         "headless": headless,
+        "use_running_chrome": use_running_chrome,
+        "debug_profile_dir": debug_profile_dir,
     }
 
 
-def _authenticate(
-    opts: CliOptions, cfg: Config, ctx: dict[str, Any], fresh: bool
-) -> AuthInfo | None:
-    """Return a valid AuthInfo, using the cache unless `fresh` is set."""
+def _authenticate(opts: CliOptions, cfg: Config, ctx: dict[str, Any]) -> AuthInfo | None:
+    """Return a valid AuthInfo: the cached token if it is still valid, otherwise
+    a (silent or interactive) browser login. None if authentication failed or
+    was cancelled."""
     cache_path = ctx["cache_path"]
-    if not fresh:
-        cached = load_token_cache(cache_path)
-        if cached is not None:
-            log.info("♻️  Cached token still valid — no browser needed.")
-            return cached
-        log.info("🔑 No valid cached token.")
+    cached = load_token_cache(cache_path)
+    if cached is not None:
+        log.info("♻️  Cached token still valid — no browser needed.")
+        return cached
+    log.info("🔑 No valid cached token.")
 
-        # This account was already logged in before and we are in headed mode:
-        # try a silent headless refresh first. If the SSO session persisted in
-        # the profile is still active, we renew the token without opening any
-        # window. Otherwise we fall back to a visible browser below.
-        if cache_path.exists() and not ctx["headless"]:
-            silent = refresh_session_token(
-                login_url=cfg.login_url,
-                user_data_dir=ctx["profile_dir"],
-                channel=ctx["channel"],
-            )
-            if silent is not None and silent.is_valid():
-                log.info("♻️  Token refreshed silently from the session.")
-                save_token_cache(silent, cache_path)
-                return silent
+    if ctx["use_running_chrome"]:
+        # The Playwright profile is flagged by La Poste's anti-bot (blank
+        # CAPTCHA). Instead, log in through a dedicated Chrome (its own
+        # --user-data-dir) that we launch with the DevTools port and attach to
+        # over CDP: it is a real, human-operated browser, so the CAPTCHA is
+        # solvable there and the session is reused across runs.
+        auth = login_via_own_chrome(
+            login_url=cfg.login_url,
+            user_data_dir=ctx["debug_profile_dir"],
+            email=cfg.email,
+            password=_resolve_secret(cfg.password),
+        )
+        if auth is not None and auth.is_valid():
+            save_token_cache(auth, cache_path)
+        return auth
+
+    # Legacy Playwright profile path: if the account was logged in before and
+    # we are in headed mode, try a silent headless refresh first (the SSO
+    # session persisted in the profile may still be active). Otherwise fall
+    # back to a visible browser below.
+    if cache_path.exists() and not ctx["headless"]:
+        silent = refresh_session_token(
+            login_url=cfg.login_url,
+            user_data_dir=ctx["profile_dir"],
+            channel=ctx["channel"],
+        )
+        if silent is not None and silent.is_valid():
+            log.info("♻️  Token refreshed silently from the session.")
+            save_token_cache(silent, cache_path)
+            return silent
 
     auth = manual_login(
         login_url=cfg.login_url,
@@ -286,7 +319,7 @@ def cmd_sync(opts: CliOptions) -> None:
     log.info("=" * 50)
     log.info("🔐 Step 1: Digiposte authentication")
     log.info("=" * 50)
-    auth = _authenticate(opts, cfg, ctx, fresh=opts.fresh_login)
+    auth = _authenticate(opts, cfg, ctx)
     if auth is None or not auth.is_valid():
         log.error("❌ Authentication failed — aborting")
         raise SystemExit(1)
@@ -296,7 +329,7 @@ def cmd_sync(opts: CliOptions) -> None:
     log.info("=" * 50)
     api = _build_api(auth, cfg)
     try:
-        documents = api.list_documents(folder_id=opts.folder_id)
+        documents = api.list_documents()
         if not documents:
             log.warning("⚠️  No document found.")
             return
@@ -307,21 +340,30 @@ def cmd_sync(opts: CliOptions) -> None:
         log.info("=" * 50)
         download_dir = ctx["download_dir"]
         download_dir.mkdir(parents=True, exist_ok=True)
+        log.info("📁 Base dir: %s", download_dir.resolve())
+        # Explicitly create one sub-folder per configured location (even when
+        # empty), so the tree always mirrors the config.
+        for location in api.locations:
+            (download_dir / location).mkdir(parents=True, exist_ok=True)
 
-        # A document already on disk (same sanitized file name) is skipped:
-        # we only compare file names, no local content index.
+        # Files are written into one sub-folder per location (INBOX, SAFE…),
+        # mirroring the configured locations under the base dir. A document
+        # already on disk (same sanitized file name in its location folder) is
+        # skipped: we only compare file names, no local content index.
         downloaded = 0
         skipped = 0
         for doc in documents:
+            location = (doc.get("location") or "MISC").strip()
+            dest = download_dir / location
             file_name = api.file_name_for(doc)
-            path = download_dir / file_name
+            path = dest / file_name
 
             if path.exists():
-                log.info("⏭️  Already present (by filename): %s", file_name)
+                log.info("⏭️  Already present (by filename): %s/%s", location, file_name)
                 skipped += 1
                 continue
 
-            path = api.download_document(doc, destination=download_dir)
+            path = api.download_document(doc, destination=dest)
             if path:
                 downloaded += 1
 
@@ -335,19 +377,19 @@ def cmd_sync(opts: CliOptions) -> None:
         api.close()
 
 
-def cmd_ls(opts: CliOptions) -> None:
+def cmd_list(opts: CliOptions) -> None:
     """Authenticate and print the document list (stdout)."""
     cfg, _ = _bootstrap_config(opts)
     ctx = _bootstrap_paths(opts, cfg)
 
-    auth = _authenticate(opts, cfg, ctx, fresh=False)
+    auth = _authenticate(opts, cfg, ctx)
     if auth is None or not auth.is_valid():
         log.error("❌ Authentication failed — aborting")
         raise SystemExit(1)
 
     api = _build_api(auth, cfg)
     try:
-        documents = api.list_documents(folder_id=opts.folder_id)
+        documents = api.list_documents()
     finally:
         api.close()
 
@@ -364,11 +406,18 @@ def cmd_ls(opts: CliOptions) -> None:
 
 
 def cmd_login(opts: CliOptions) -> None:
-    """Force a fresh browser login and store the token."""
+    """Ensure a valid token. If one is already cached, just report it (no
+    browser). Otherwise authenticate — silently via the stored SSO session, or
+    through a visible browser window if a real login is needed."""
     cfg, _ = _bootstrap_config(opts)
     ctx = _bootstrap_paths(opts, cfg)
 
-    auth = _authenticate(opts, cfg, ctx, fresh=True)
+    auth = load_token_cache(ctx["cache_path"])
+    if auth is not None:
+        log.info("✅ Already logged in — token still valid.")
+        return
+
+    auth = _authenticate(opts, cfg, ctx)
     if auth is None or not auth.is_valid():
         log.error("❌ Login failed — aborting")
         raise SystemExit(1)
@@ -376,12 +425,28 @@ def cmd_login(opts: CliOptions) -> None:
 
 
 def cmd_logout(opts: CliOptions) -> None:
-    """Delete the cached token."""
+    """Delete the cached token. With --reset, also delete the browser profiles
+    (dedicated Chrome session and legacy Playwright profile) — full sign-out."""
     cfg, _ = _bootstrap_config(opts)
     cache_path = cfg.token_cache or paths.token_cache_path()
+    removed: list[str] = []
     if cache_path.exists():
         cache_path.unlink()
-        log.info("🗑️  Cached token removed (%s)", cache_path)
+        removed.append(str(cache_path))
+
+    if opts.reset:
+        for profile in (
+            cfg.profile_dir or paths.profile_dir(),
+            cfg.debug_profile_dir or paths.debug_profile_dir(),
+        ):
+            if profile.exists():
+                shutil.rmtree(profile, ignore_errors=True)
+                removed.append(str(profile))
+
+    if removed:
+        log.info("🗑️  Removed: %s", ", ".join(removed))
+    elif opts.reset:
+        log.info("ℹ️  Already signed out — nothing to remove.")
     else:
         log.info("ℹ️  No cached token to remove (%s).", cache_path)
 
@@ -394,6 +459,11 @@ def cmd_status(opts: CliOptions) -> None:
     print(f"Config file:     {config_path}")
     print(f"Login URL:       {cfg.login_url}")
     print(f"Channel:         {cfg.playwright_channel}  (headless: {cfg.headless})")
+    debug_profile = cfg.debug_profile_dir or paths.debug_profile_dir()
+    if cfg.use_running_chrome:
+        print(f"Own Chrome (CDP):  yes (dedicated profile: {debug_profile})")
+    else:
+        print("Own Chrome (CDP):  no (Playwright profile)")
     print(f"API base URL:    {cfg.api_base_url}")
     print(
         f"Locations:       {', '.join(cfg.locations or ['SAFE', 'INBOX'])}  (max: {cfg.max_results})"

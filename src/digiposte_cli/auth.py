@@ -12,6 +12,8 @@ Flow (discovered from the SPA traffic + open-source projects):
 
 import json
 import logging
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +29,17 @@ log = logging.getLogger("digiposte")
 TOKEN_URL = "https://secure.digiposte.fr/rest/security/token"
 # Host where the session is actually established (after the SSO is done)
 APP_HOST = "secure.digiposte.fr"
+
+# DevTools endpoint of a Chrome started with `--remote-debugging-port=9222`.
+# Attaching over CDP to a Chrome we started ourselves — with its own
+# `--user-data-dir` — is the reliable way to log in: it is a normal,
+# human-operated Chrome, so La Poste's anti-bot does not flag it, the CAPTCHA
+# is solvable there and the session persists in that profile between runs.
+DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+
+# Cookie domains that indicate an active La Poste / Digiposte session in a
+# browser profile (used to pick the right context when attaching over CDP).
+_SESSION_DOMAINS = ("digiposte.fr", "laposte.fr")
 
 # Selectors of the La Poste SSO login form (Keycloak "mon-compte").
 # The page is localized, so we target the stable element ids rather than the
@@ -473,3 +486,286 @@ def refresh_session_token(
             except PlaywrightError:
                 pass
         pw.stop()
+
+
+def _has_session_cookie(ctx) -> bool:
+    """True if a context (browser profile) holds a La Poste/Digiposte cookie."""
+    try:
+        for cookie in ctx.cookies():
+            domain = (cookie.get("domain") or "").lstrip(".")
+            if any(domain.endswith(suffix) for suffix in _SESSION_DOMAINS):
+                return True
+    except PlaywrightError:
+        return False
+    return False
+
+
+def _pick_session_context(browser) -> Any | None:
+    """Pick the context (profile) that holds the Digiposte/La Poste session,
+    else the first available context of the attached browser."""
+    contexts = browser.contexts
+    for ctx in contexts:
+        if _has_session_cookie(ctx):
+            return ctx
+    return contexts[0] if contexts else None
+
+
+def login_via_own_chrome(
+    login_url: str = "https://secure.digiposte.fr/home",
+    user_data_dir: Path | None = None,
+    cdp_url: str = DEFAULT_CDP_URL,
+    timeout: float = 300.0,
+    email: str = "",
+    password: str = "",
+) -> AuthInfo | None:
+    """Authenticate through a DEDICATED Chrome with its own --user-data-dir.
+
+    A Chrome is started with the DevTools port only if none is already running
+    on it, and is closed again once the token is obtained — the session cookies
+    stay in the profile, so the next run starts clean. A silent headless probe
+    first reuses an already-alive session (no window shown); only when a real
+    login is needed does a visible window open, where the CAPTCHA is solvable
+    because it is a genuine, human-operated Chrome. If `email`/`password` are
+    provided, the login form is pre-filled and submitted automatically there
+    (you only solve the CAPTCHA, if any).
+    Returns None on failure / cancel / timeout."""
+    if user_data_dir is None:
+        # No dedicated profile configured: attach to whatever Chrome already
+        # answers on the port (e.g. one the user started by hand).
+        log.info("🖥️  Attaching to the Chrome on %s…", cdp_url)
+        return _login_over_cdp(
+            cdp_url, login_url, timeout, None, interactive=True, email=email, password=password
+        )
+
+    binary = _find_chrome_binary()
+    if binary is None:
+        log.error("❌ No Chromium browser found (searched for %s).", ", ".join(_CHROME_CANDIDATES))
+        log.error("   Install Google Chrome, or start one yourself with")
+        log.error("      --remote-debugging-port=9222 --user-data-dir=<dir>")
+        return None
+
+    if _cdp_reachable(cdp_url):
+        log.info("🖥️  Using the Chrome already running on %s.", cdp_url)
+        return _login_over_cdp(
+            cdp_url, login_url, timeout, None, interactive=True, email=email, password=password
+        )
+
+    # 1) Headless probe: reuse an alive session without showing any window.
+    probe = _launch_chrome_debug(binary, user_data_dir, cdp_url, headless=True)
+    try:
+        if _wait_cdp(cdp_url):
+            auth = _login_over_cdp(cdp_url, login_url, 10.0, None, interactive=False)
+            if auth is not None:
+                return auth
+    finally:
+        _terminate_chrome(probe)
+    # Chrome is single-instance per --user-data-dir: make sure the probe has
+    # released the profile/port before starting the visible window.
+    _wait_cdp_gone(cdp_url)
+
+    # 2) Interactive: a real window where the user logs in / solves the CAPTCHA.
+    log.info("🔑 No active session — opening a visible Chrome window for login…")
+    if email and password:
+        log.info("🤖 Credentials found: automatic email + password pre-fill.")
+    handle = _launch_chrome_debug(binary, user_data_dir, cdp_url, headless=False)
+    if not _wait_cdp(cdp_url):
+        log.error("❌ Chrome did not open the DevTools port. Is another Chrome")
+        log.error("   already using profile %s? Close it and retry.", user_data_dir)
+        _terminate_chrome(handle)
+        return None
+    return _login_over_cdp(
+        cdp_url, login_url, timeout, handle, interactive=True, email=email, password=password
+    )
+
+
+def _login_over_cdp(
+    cdp_url: str,
+    login_url: str,
+    timeout: float,
+    handle: subprocess.Popen | None,
+    interactive: bool,
+    email: str = "",
+    password: str = "",
+) -> AuthInfo | None:
+    """Attach over CDP, drive the login, fetch the token.
+
+    `handle` is the Chrome we launched (closed when we are done) or None when a
+    Chrome was already running on the port (left untouched). When `interactive`
+    and credentials are given, the login form is pre-filled and submitted
+    automatically (never in the headless probe: its CAPTCHA would be
+    unsolvable)."""
+    pw = sync_playwright().start()
+    browser = None
+    page = None
+    try:
+        browser = pw.chromium.connect_over_cdp(cdp_url)
+    except PlaywrightError as exc:
+        log.error("❌ Cannot connect to Chrome at %s (%s).", cdp_url, exc)
+        return None
+    try:
+        ctx = _pick_session_context(browser)
+        if ctx is None:
+            log.error("❌ No browser context found on %s", cdp_url)
+            return None
+        page = ctx.new_page()
+        page.goto(login_url, wait_until="domcontentloaded")
+        autofilled = False
+        if interactive and email and password and not _is_logged_in(page.url):
+            autofilled = _autofill_login(page, email, password)
+            if autofilled:
+                log.info("✍️  Email + password submitted automatically.")
+                log.info("   If a CAPTCHA appears, solve it in the window.")
+        return _wait_login_and_fetch(
+            ctx, page, login_url, timeout, interactive, autofilled=autofilled
+        )
+    except PlaywrightError as exc:
+        log.warning("🚫 Chrome interaction failed: %s", exc)
+        return None
+    except KeyboardInterrupt:
+        log.info("⏹️  Interrupted by the user")
+        return None
+    finally:
+        if page is not None:
+            try:
+                page.close()  # only our tab — never the whole browser
+            except PlaywrightError:
+                pass
+        if handle is not None:
+            log.info("🖥️  Closing the dedicated login Chrome (session kept on disk).")
+            _terminate_chrome(handle)
+        pw.stop()
+
+
+def _login_form_visible(page) -> bool:
+    """True if the Keycloak email field is on screen — i.e. the SSO session is
+    NOT alive and a real login would be required."""
+    try:
+        return page.locator(_LOGIN_SELECTORS["email"]).is_visible(timeout=200)
+    except PlaywrightError:
+        return False
+
+
+def _wait_login_and_fetch(
+    ctx, page, login_url: str, timeout: float, interactive: bool, autofilled: bool = False
+) -> AuthInfo | None:
+    """Wait until the vault is reached on `page`, then fetch the API token."""
+    if _is_logged_in(page.url):
+        log.info("✅ Already logged in — fetching a fresh token…")
+        return _token_from_session(ctx, page)
+    if interactive:
+        if autofilled:
+            log.info("⏳ Login submitted — finish it in the Chrome window (solve")
+            log.info("   the CAPTCHA if one appeared)…")
+        else:
+            log.info("⏳ Please finish the login in the Chrome window that just opened.")
+        log.info("   If a CAPTCHA shows up there, solve it: this browser is not")
+        log.info("   flagged (unlike the Playwright profile).")
+    deadline = time.monotonic() + timeout
+    while not _is_logged_in(page.url):
+        # Headless probe: as soon as the SSO login form shows up, the session
+        # is dead — bail out at once instead of burning the whole probe timeout
+        # (a login can never complete headless anyway).
+        if not interactive and _login_form_visible(page):
+            return None
+        if time.monotonic() > deadline:
+            if interactive:
+                log.error("❌ Timed out after %d s waiting for the login.", int(timeout))
+            return None
+        page.wait_for_timeout(500 if not interactive else 1000)
+        log.debug("Current URL: %s", page.url)
+    log.info("✅ Login detected — fetching the token…")
+    return _token_from_session(ctx, page)
+
+
+def _launch_chrome_debug(
+    binary: str,
+    user_data_dir: Path,
+    cdp_url: str,
+    headless: bool,
+) -> subprocess.Popen | None:
+    """Start a dedicated Chrome with its own profile + DevTools port.
+
+    No URL is passed on the command line: the caller navigates through CDP
+    (`ctx.new_page().goto(...)`), otherwise Chrome would open the login page
+    twice (argv URL + the CDP tab).
+    The returned process is owned by the caller (terminate it once the token is
+    obtained or the flow aborts)."""
+    port = urlparse(cdp_url).port or 9222
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    args = [
+        binary,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={user_data_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if headless:
+        args.append("--headless=new")
+    log.info(
+        "🚀 Launching dedicated Chrome (profile: %s%s)…",
+        user_data_dir,
+        " [headless]" if headless else "",
+    )
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _terminate_chrome(handle: subprocess.Popen | None) -> None:
+    """Gracefully close a Chrome instance we launched (the session is persisted
+    on disk, so the login survives across runs)."""
+    if handle is None or handle.poll() is not None:
+        return
+    try:
+        handle.terminate()
+        handle.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def _wait_cdp(cdp_url: str, timeout_s: float = 10.0) -> bool:
+    """Poll the DevTools endpoint until a Chrome answers (or the timeout)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _cdp_reachable(cdp_url):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _wait_cdp_gone(cdp_url: str, timeout_s: float = 6.0) -> bool:
+    """Poll the DevTools endpoint until no Chrome answers any more (or the
+    timeout). Used to make sure a previous instance released its profile."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not _cdp_reachable(cdp_url):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _cdp_reachable(cdp_url: str) -> bool:
+    """True if a Chrome already answers on the DevTools endpoint."""
+    try:
+        resp = requests.get(f"{cdp_url.rstrip('/')}/json/version", timeout=1.5)
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+# Chromium-based binaries tried, in order, when launching the dedicated Chrome.
+_CHROME_CANDIDATES = (
+    "google-chrome-stable",
+    "google-chrome",
+    "chromium",
+    "chromium-browser",
+    "brave-browser",
+    "microsoft-edge-stable",
+)
+
+
+def _find_chrome_binary() -> str | None:
+    """Locate a Chromium-based binary to launch for the dedicated login."""
+    for name in _CHROME_CANDIDATES:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None

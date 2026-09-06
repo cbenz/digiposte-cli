@@ -3,6 +3,7 @@
 No application state is created inside the source directory. Everything is
 stored under the standard XDG directories:
 - browser profile   → $XDG_DATA_HOME/digiposte-cli
+- debug Chrome      → $XDG_STATE_HOME/digiposte-cli (own --user-data-dir)
 - session token     → $XDG_STATE_HOME/digiposte-cli
 - documents         → ~/Documents/digiposte
 """
@@ -41,6 +42,13 @@ def download_dir() -> Path:
 def profile_dir() -> Path:
     """Persistent browser profile (the SSO session survives there)."""
     return xdg_data_home() / _APP / "chrome-profile"
+
+
+def debug_profile_dir() -> Path:
+    """Dedicated Chrome user-data-dir used for the anti-CAPTCHA login (started
+    with `--remote-debugging-port`). Lives in the state dir so the session
+    persists between runs while staying separate from the user's own Chrome."""
+    return xdg_state_home() / _APP / "chrome-debug"
 
 
 def token_cache_path() -> Path:
