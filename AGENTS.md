@@ -25,6 +25,12 @@ surface is English.
 - [docs/API.md](docs/API.md) — the two Digiposte APIs (partner OKAPI vs
   personal vault): URLs, authentication, endpoints. Only the personal vault is
   used.
+- [docs/functional-specs.md](docs/functional-specs.md) — **functional spec**:
+  purpose, commands, download layout, configuration and constraints (the
+  “what”).
+- [docs/technical-specs.md](docs/technical-specs.md) — **technical spec**:
+  architecture, modules, auth/API/sync flows and key design decisions (the
+  “how”).
 - [docs/swagger.json](docs/swagger.json) — personal vault (internal API)
   swagger.
 - Developer portal (partner OKAPI API):

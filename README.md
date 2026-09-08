@@ -156,3 +156,7 @@ uv run digiposte-cli --help
   (dedicated Chrome + CDP, and the anti-CAPTCHA pitfalls).
 - [docs/API.md](docs/API.md) (and the local swagger
   [docs/swagger.json](docs/swagger.json)) — the underlying HTTP API details.
+- [docs/functional-specs.md](docs/functional-specs.md) — functional spec:
+  commands, download layout, configuration and constraints.
+- [docs/technical-specs.md](docs/technical-specs.md) — technical spec:
+  architecture, module responsibilities and key flows.
