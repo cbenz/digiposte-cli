@@ -91,22 +91,45 @@ class DigiposteAPI:
         listing route (e.g. GET /documents/safe, /documents/inbox) and merge
         the results (deduplicated by document id). Each returned document is
         tagged with its canonical `location` (e.g. "INBOX"), which the sync
-        command uses to mirror the configured locations in the download dir."""
+        command uses to mirror the configured locations in the download dir.
+
+        The listing is **paginated**: the server only returns `max_results`
+        documents per page (10 by default) and echoes `{count, documents,
+        index, max_results}` where `count` is the location total. Every page
+        is fetched by walking `index` until the declared `count` is reached,
+        so a vault with more documents than the page size is fully listed
+        (before this fix, only the first page was ever seen)."""
         documents: list[dict[str, Any]] = []
         seen: set[str] = set()
         for location in self.locations:
             # The API identifiers are uppercase ("SAFE", "INBOX"…); the REST
             # listing path uses their lowercase slug ("/documents/safe"…).
-            data = self._get(f"/documents/{location.lower()}", label=f"List ({location})")
-            found = _extract_documents(data) if data is not None else []
-            for doc in found:
-                doc.setdefault("location", location)
-                doc_id = doc.get("id")
-                key = str(doc_id) if doc_id is not None else repr(doc)
-                if key in seen:
-                    continue
-                seen.add(key)
-                documents.append(doc)
+            index = 0
+            while True:
+                data = self._get(
+                    f"/documents/{location.lower()}?index={index}&max_results={self.max_results}",
+                    label=f"List ({location})",
+                )
+                found = _extract_documents(data) if data is not None else []
+                total = data.get("count") if isinstance(data, dict) else None
+                for doc in found:
+                    doc.setdefault("location", location)
+                    doc_id = doc.get("id")
+                    key = str(doc_id) if doc_id is not None else repr(doc)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    documents.append(doc)
+                # Stop when the request failed, the page is empty, the
+                # declared total is covered, or a short page indicates the
+                # end of the list; otherwise fetch the next page.
+                if data is None or not found:
+                    break
+                if total is not None and index + len(found) >= total:
+                    break
+                if total is None and len(found) < self.max_results:
+                    break
+                index += self.max_results
         if not documents:
             log.warning(
                 "⚠️  No documents found in the configured locations (%s).",

@@ -203,8 +203,12 @@ Details:
   configured location (config identifiers are uppercase API enums; routes use
   lowercase slugs, e.g. `/documents/safe`), merges and dedupes by document id,
   and tags every document with its canonical uppercase `location`
-  (`doc.setdefault("location", location)`). `max_results` is carried on the
-  client but the per-location routes have no folder filter.
+  (`doc.setdefault("location", location)`). The routes are **paginated**: the
+  server returns `{count, documents, index, max_results}` with `max_results`
+  defaulting to **10**, so only the first page would be seen otherwise.
+  `list_documents()` passes `?index=&max_results=` (the configured
+  `max_results`, default 1000) and walks `index += max_results` until `count`
+  documents are collected — a vault larger than one page is fully listed.
 - `_extract_documents` tolerates the response shapes (direct list or
   `{results|documents|items|hits|content: [...]}`).
 - **File names**: `_safe_filename` sanitizes title/name/subtitle (illegal

@@ -55,10 +55,19 @@ Useful endpoints for a vault backup:
 
 | Endpoint | Method | Usage |
 | --- | --- | --- |
-| `/documents/search?max_results=1000&sort=CREATION_DATE` | POST | list documents, body `{"locations":["SAFE","INBOX"],"folder_id":""}` |
+| `/documents/{location}?index=&max_results=` | GET | list the documents of one location (`safe`, `inbox`, …) |
 | `/folders` | GET | folder tree |
 | `/document/{id}/content` | GET | raw (byte) content of a document |
 | `/dashboard` | GET | vault information |
+
+> The listing is **paginated**: each location route answers
+> `{"count": <total>, "documents": [...], "index": <offset>, "max_results":
+> <page size>}`. Without query params the server defaults to
+> `max_results = 10` — only the **first page** is returned, so vaults with
+> more documents are silently truncated. The `sync`/`list` commands therefore
+> walk `index` (`index += max_results`) until `count` documents are collected.
+> The `/documents/search` POST endpoint documented in older revisions answers
+> an empty/`404` result and is **not** used.
 
 Expected headers: `Authorization: Bearer`, `X-API-VERSION-MINOR: 2`,
 `Accept: application/json`, `Content-Type: application/json`.
