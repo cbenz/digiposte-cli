@@ -378,6 +378,13 @@ def cmd_sync(opts: CliOptions) -> None:
             if path:
                 downloaded += 1
 
+        # Post pass — rename the files whose source document is no longer
+        # listed by the vault (deleted, moved to trash…) and were therefore
+        # never seen above: applying the rules to every on-disk name is
+        # idempotent (an already-canonical file is left alone).
+        for folder in sorted(d for d in download_dir.iterdir() if d.is_dir()):
+            renamed += api.rename_leftover(folder)
+
         log.info(
             "🎉 Done — %s downloaded, %s renamed, %s already present, in %s",
             downloaded,

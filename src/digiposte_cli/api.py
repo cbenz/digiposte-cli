@@ -176,6 +176,27 @@ class DigiposteAPI:
                 return target
         return None
 
+    def rename_leftover(self, directory: Path) -> int:
+        """Rename the files of `directory` still carrying a pre-rules name.
+
+        Applies the rename_rules to every file name (idempotent: an already
+        canonical name is unchanged) and renames the ones that change. This
+        catches files whose source document is no longer listed by the vault
+        (deleted, moved to trash…), so `rename_legacy` never saw them. A file
+        whose target name already exists is left untouched. Returns the number
+        of renames performed."""
+        renamed = 0
+        for path in sorted(directory.iterdir()):
+            if not path.is_file():
+                continue
+            target = directory / self._apply_rename_rules(path.name)
+            if target == path or target.exists():
+                continue
+            path.rename(target)
+            log.info("🔁 Renamed: %s → %s", path.name, target.name)
+            renamed += 1
+        return renamed
+
     def download_document(self, doc: dict[str, Any] | str, destination: Path) -> Path | None:
         """Download a document's content via
         GET /document/{id}/content (returns the raw bytes)."""

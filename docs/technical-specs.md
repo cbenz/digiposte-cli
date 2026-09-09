@@ -218,7 +218,10 @@ Details:
   returns the pre-rules name (the raw sanitized name) and `rename_legacy`
   renames an on-disk file found under that name to the current one — mirroring
   ameli-cli, so files downloaded before the rules existed are not downloaded
-  twice.
+  twice. `rename_leftover(directory)` does the same pass *without* a vault
+  document: it applies the rules to every file name of a folder (idempotent,
+  never overwrites an existing target), catching files whose source document
+  is no longer listed (deleted, moved to trash).
 - **Download**: `download_document()` streams `GET /document/{id}/content`
   (120 s timeout, 64 KiB chunks) into `<destination>/<file name>`.
 - HTTP 401 → clear hint to run `digiposte-cli login`.
@@ -240,8 +243,10 @@ Details:
    `[download] rename_rules`): skip it when `<dest>/<file_name>` already exists
    (filename-only skip); else try `api.rename_legacy(doc, dest)` — a file left
    under the pre-rules (un-renamed) name is renamed to the canonical one and
-   counted as `renamed`; else download under the canonical name. Final report:
-   downloaded vs renamed vs already present.
+   counted as `renamed`; else download under the canonical name. A final post
+   pass runs `api.rename_leftover(folder)` on every sub-folder of the base dir
+   to rename leftover files whose document is no longer listed by the vault.
+   Final report: downloaded vs renamed vs already present.
 
 `list` (`ls`) prints `label\tid` per document (or the raw JSON on stdout with
 `--json`). `login` is idempotent (valid cache → message, no browser). `logout`

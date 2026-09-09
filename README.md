@@ -116,7 +116,8 @@ chronologically.
 A file already present in its location folder (same file name after the rules
 are applied) is skipped — only file names are compared, there is no local
 content index. A file left by an earlier run under the *un-renamed* name is
-renamed automatically instead of being downloaded twice.
+renamed automatically instead of being downloaded twice — including files
+whose source document is no longer in the vault (deleted, moved to trash).
 
 ## Configuration
 

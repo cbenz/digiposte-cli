@@ -109,7 +109,9 @@ Rules:
   SHA-256 / `downloads.json`).
 - A file written by an earlier run under the *un-renamed* name (before the
   rules existed) is **renamed automatically** to the current name instead of
-  being downloaded again under a second name.
+  being downloaded again under a second name. This also applies to leftover
+  files whose source document is **no longer in the vault** (deleted, moved to
+  trash…): a final on-disk pass normalizes them too.
 - `sync` reports how many documents were downloaded vs. renamed vs. already
   present.
 
