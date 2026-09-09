@@ -305,6 +305,7 @@ def _build_api(auth: AuthInfo, cfg: Config) -> DigiposteAPI:
         base_url=cfg.api_base_url,
         locations=cfg.locations,
         max_results=cfg.max_results,
+        rename_rules=cfg.rename_rules,
     )
 
 
@@ -347,11 +348,17 @@ def cmd_sync(opts: CliOptions) -> None:
             (download_dir / location).mkdir(parents=True, exist_ok=True)
 
         # Files are written into one sub-folder per location (INBOX, SAFE…),
-        # mirroring the configured locations under the base dir. A document
-        # already on disk (same sanitized file name in its location folder) is
-        # skipped: we only compare file names, no local content index.
+        # mirroring the configured locations under the base dir. The on-disk
+        # file name is the vault title sanitized + extension, with the
+        # [download] rename_rules applied to the stem (api.file_name_for). A
+        # document already on disk (same file name in its location folder) is
+        # skipped: we only compare file names, no local content index. Before
+        # downloading, files written by older versions (before the rules
+        # existed, under the un-renamed name) are renamed instead of being
+        # downloaded again under a second name.
         downloaded = 0
         skipped = 0
+        renamed = 0
         for doc in documents:
             location = (doc.get("location") or "MISC").strip()
             dest = download_dir / location
@@ -363,13 +370,18 @@ def cmd_sync(opts: CliOptions) -> None:
                 skipped += 1
                 continue
 
+            if api.rename_legacy(doc, dest) is not None:
+                renamed += 1
+                continue
+
             path = api.download_document(doc, destination=dest)
             if path:
                 downloaded += 1
 
         log.info(
-            "🎉 Done — %s downloaded, %s already present, in %s",
+            "🎉 Done — %s downloaded, %s renamed, %s already present, in %s",
             downloaded,
+            renamed,
             skipped,
             download_dir.resolve(),
         )

@@ -102,11 +102,21 @@ mirrors the config):
 ~/Documents/digiposte/
 ├── SAFE/
 └── INBOX/
-    └── BULLETIN DE PAIE 01_2026.pdf
+    └── Bulletin de paie 2026-02.pdf
 ```
 
-A file already present in its location folder (same sanitized file name) is
-skipped — only file names are compared, there is no local content index.
+The on-disk name is the sanitized vault title + extension. Because Digiposte
+file names depend on the **vault content** (not dictated by the API), you can
+rewrite them with regex substitutions through the
+[`[download] rename_rules`](#file-name-renaming-download-rename_rules)
+config — e.g. to turn `BULLETIN DE PAIE 02_2026.pdf` (month first, ALL CAPS)
+into a normal, readable `Bulletin de paie 2026-02.pdf` that sorts
+chronologically.
+
+A file already present in its location folder (same file name after the rules
+are applied) is skipped — only file names are compared, there is no local
+content index. A file left by an earlier run under the *un-renamed* name is
+renamed automatically instead of being downloaded twice.
 
 ## Configuration
 
@@ -118,6 +128,7 @@ uncomment a line to override its default.
 [auth]        # login_url, email, password, headless, use_running_chrome
 [playwright]  # channel = "chrome" (or "msedge", "" = bundled Chromium)
 [api]         # base_url, locations = ["SAFE", "INBOX"], max_results = 1000
+[download]    # rename_rules (regex substitutions on downloaded file names)
 [log]         # level = "INFO" (DEBUG, INFO, WARNING, ERROR)
 [paths]       # download_dir, profile_dir, debug_profile_dir, token_cache
 ```
@@ -130,6 +141,40 @@ machine through the `command:` prefix (no dependency on a specific manager):
 email = "you@example.com"
 password = "command:pass show digiposte"
 ```
+
+### File name renaming (`[download] rename_rules`)
+
+Because Digiposte file names come from the vault content, the CLI does not
+impose a name template (unlike `ameli-cli`, where the API dictated the names).
+Instead, you express **regex match/replacement rules**, applied in order to
+each file **stem** (the extension is kept). Each rule replaces every match of
+`pattern` with `replacement` (Python `re` syntax: back-references `\1`,
+`\g<name>`, …). Example — a payroll bulletin is sent month-first, ALL CAPS as
+`BULLETIN DE PAIE 02_2026.pdf`; the most explicit rule spells out the whole
+name and rewrites it to a normal, chronological `Bulletin de paie 2026-02.pdf`
+(`(?i)` makes the match case-insensitive):
+
+```toml
+[download]
+rename_rules = [
+  # "BULLETIN DE PAIE 02_2026.pdf" → "Bulletin de paie 2026-02.pdf"
+  # (each rule is an inline table: it must stay on a single line)
+  { pattern = '(?i)^BULLETIN DE PAIE (0[1-9]|1[0-2])_([0-9]{4})$', replacement = 'Bulletin de paie \2-\1' },
+]
+```
+
+A shorter rule only reorders a trailing `MM_YYYY` date token, keeping the
+vault prefix as-is: `{ pattern = '(0[1-9]|1[0-2])_([0-9]{4})$',
+replacement = '\2-\1' }` → `BULLETIN DE PAIE 2026-02.pdf`.
+
+> Prefer **single-quoted** TOML strings (`'…'`): they keep backslashes
+> literal, so `\d`, `\1`, `\g<name>` work as in Python. In double-quoted
+> strings a backslash must be escaped (`"\\d"`).
+
+The rules are validated when the config is read (a bad pattern or a bad
+back-reference aborts the run with a clear message). Files downloaded before
+these rules existed — under the un-renamed name — are **renamed automatically**
+on the next `sync`, they are not downloaded twice.
 
 ## Locations (XDG defaults)
 

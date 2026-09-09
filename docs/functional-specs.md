@@ -98,10 +98,20 @@ Rules:
   `location` falls back to a `MISC` folder.
 - The on-disk file name is a **sanitized title + extension** (characters like
   `/ \ : * ? " < > |` become `_`).
-- **Skip is by file name only**: if `<dest>/<file name>` already exists, the
-  document is skipped (`Already present (by filename)`) — there is **no local
-  content index** (no SHA-256 / `downloads.json`).
-- `sync` reports how many documents were downloaded vs. already present.
+- The file names depend on the **vault content** (Digiposte does not dictate
+  them), so the user can express **regex substitutions** in the config
+  (`[download] rename_rules`), applied in order to each file *stem* — e.g. to
+  reorder a month-first `MM_YYYY` into `YYYY-MM` so alphabetical order is
+  chronological (see §7).
+- **Skip is by file name only**: if `<dest>/<file name>` (after the rename
+  rules) already exists, the document is skipped
+  (`Already present (by filename)`) — there is **no local content index** (no
+  SHA-256 / `downloads.json`).
+- A file written by an earlier run under the *un-renamed* name (before the
+  rules existed) is **renamed automatically** to the current name instead of
+  being downloaded again under a second name.
+- `sync` reports how many documents were downloaded vs. renamed vs. already
+  present.
 
 ## 7. Configuration
 
@@ -115,6 +125,7 @@ built-in default**.
 | `[auth]` | `login_url`, `email`, `password`, `headless`, `use_running_chrome` | SSO entry point, automatic credentials pre-fill, headless mode, dedicated-Chrome vs legacy Playwright auth. |
 | `[playwright]` | `channel` | Browser channel for the legacy path (`chrome`, `msedge`, `""` = bundled Chromium). |
 | `[api]` | `base_url`, `locations`, `max_results` | Vault API base URL; locations to browse (uppercase API identifiers, e.g. `["SAFE","INBOX"]`); max documents per call. |
+| `[download]` | `rename_rules` | Regex substitutions applied in order to each downloaded file *stem* (the extension is kept), to rewrite the vault-given file names (e.g. make the folder sort chronologically). Empty by default = raw sanitized names. |
 | `[log]` | `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default `INFO`). |
 | `[paths]` | `download_dir`, `profile_dir`, `debug_profile_dir`, `token_cache` | Override of the XDG default locations. |
 

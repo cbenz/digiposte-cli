@@ -7,11 +7,12 @@ here so downstream code can trust them.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ── Shared validators ──────────────────────────────────────────────────
 
@@ -72,6 +73,36 @@ class ApiFile(BaseModel):
         return _ensure_http_url(value)
 
 
+class RenameRule(BaseModel):
+    """One regex substitution applied to a downloaded document file name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pattern: str
+    replacement: str = ""
+
+    @model_validator(mode="after")
+    def _validate_regex(self) -> RenameRule:
+        # The replacement is validated against the pattern even with an empty
+        # input (re.sub parses the replacement template regardless of matches),
+        # so a bad back-reference such as \2 on a single-group pattern is
+        # rejected here rather than at sync time.
+        try:
+            re.compile(self.pattern)
+            re.sub(self.pattern, self.replacement, "")
+        except re.error as exc:
+            raise ValueError(f"invalid rename rule: {exc}") from exc
+        return self
+
+
+class DownloadFile(BaseModel):
+    """[download] section of the config file (file-name renaming)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rename_rules: list[RenameRule] = Field(default_factory=list)
+
+
 class LogFile(BaseModel):
     """[log] section of the config file."""
 
@@ -106,6 +137,7 @@ class ConfigFile(BaseModel):
     auth: AuthFile = Field(default_factory=AuthFile)
     playwright: PlaywrightFile = Field(default_factory=PlaywrightFile)
     api: ApiFile = Field(default_factory=ApiFile)
+    download: DownloadFile = Field(default_factory=DownloadFile)
     log: LogFile = Field(default_factory=LogFile)
     paths: PathsFile = Field(default_factory=PathsFile)
 

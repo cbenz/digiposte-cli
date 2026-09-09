@@ -104,7 +104,7 @@ dependencies = [
     { name = "requests" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "ruff" },
 ]
@@ -114,9 +114,10 @@ requires-dist = [
     { name = "playwright", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "requests", specifier = ">=2.31" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.5" }]
 
 [[package]]
 name = "greenlet"

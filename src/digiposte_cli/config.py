@@ -10,7 +10,7 @@ schemas.py). If the file does not exist, the CLI generates it on first run (see
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -85,6 +85,9 @@ class Config:
     api_base_url: str = "https://api.digiposte.fr/api/v3"
     locations: list[str] | None = None
     max_results: int = 1000
+    # download / file naming: regex (pattern, replacement) pairs applied to the
+    # file stem of every downloaded document, in order (see api.py).
+    rename_rules: list[tuple[str, str]] = field(default_factory=list)
     # logging
     log_level: str = "INFO"
     # paths (resolved: XDG defaults if absent from the config)
@@ -139,6 +142,7 @@ def load_config(path: Path | None = None) -> Config:
     cfg.api_base_url = str(parsed.api.base_url)
     cfg.locations = list(parsed.api.locations)
     cfg.max_results = parsed.api.max_results
+    cfg.rename_rules = [(rule.pattern, rule.replacement) for rule in parsed.download.rename_rules]
     cfg.log_level = parsed.log.level
 
     cfg.download_dir = _resolve_path(parsed.paths.download_dir, paths.download_dir())

@@ -43,10 +43,16 @@ class DigiposteAPI:
         base_url: str = _DEFAULT_BASE_URL,
         locations: list[str] | None = None,
         max_results: int = _DEFAULT_MAX_RESULTS,
+        rename_rules: list[tuple[str, str]] | None = None,
     ) -> None:
         self.base_url = base_url
         self.locations = locations or list(_DEFAULT_LOCATIONS)
         self.max_results = max_results
+        # [download] rename_rules: regex (pattern, replacement) pairs applied to
+        # the file stem of every downloaded document (see file_name_for).
+        self.rename_rules = [
+            (re.compile(pattern), replacement) for pattern, replacement in (rename_rules or [])
+        ]
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -129,9 +135,46 @@ class DigiposteAPI:
         return name
 
     def file_name_for(self, doc: dict[str, Any]) -> str:
-        """Return the on-disk file name for a document (sanitized title +
-        extension). Used both to download and to locate it on disk."""
-        return self._safe_filename(doc)
+        """Return the on-disk file name for a document: the sanitized title +
+        extension, then the configured [download] rename_rules applied to the
+        stem. Used both to download and to locate it on disk."""
+        return self._apply_rename_rules(self._safe_filename(doc))
+
+    def _apply_rename_rules(self, file_name: str) -> str:
+        """Apply the configured rename_rules to a file name, in order.
+
+        The rules rewrite the file *stem* (the part before the last `.`
+        extension), so a pattern can be anchored with `$` without having to
+        account for the extension. Every occurrence matched by a rule is
+        replaced."""
+        stem, dot, extension = file_name.rpartition(".")
+        if not dot:
+            stem, dot, extension = file_name, "", ""
+        for pattern, replacement in self.rename_rules:
+            stem = pattern.sub(replacement, stem)
+        return f"{stem}{dot}{extension}"
+
+    def legacy_file_names_for(self, doc: dict[str, Any]) -> list[str]:
+        """File names used for `doc` before the rename_rules existed (the raw
+        sanitized title + extension). Older downloads used exactly this name,
+        so `rename_legacy` can pick them up instead of downloading twice."""
+        return [self._safe_filename(doc)]
+
+    def rename_legacy(self, doc: dict[str, Any], destination: Path) -> Path | None:
+        """Rename a file downloaded before the rename_rules to the current name.
+
+        Returns the (new) path if such a file was found and renamed, else None.
+        Lets `sync` pick up files written by older versions (before the rules
+        existed) instead of downloading the same document again under a second
+        name."""
+        target = destination / self.file_name_for(doc)
+        for legacy in self.legacy_file_names_for(doc):
+            source = destination / legacy
+            if source.exists():
+                source.rename(target)
+                log.info("🔁 Renamed: %s → %s", source.name, target.name)
+                return target
+        return None
 
     def download_document(self, doc: dict[str, Any] | str, destination: Path) -> Path | None:
         """Download a document's content via
@@ -145,7 +188,7 @@ class DigiposteAPI:
             if not document_id:
                 log.error("❌ Document without id: %s", doc)
                 return None
-            file_name = self._safe_filename(doc)
+            file_name = self.file_name_for(doc)
 
         url = f"{self.base_url}/document/{document_id}/content"
         log.info("⬇️  Downloading “%s”…", file_name)

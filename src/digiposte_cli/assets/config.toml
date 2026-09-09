@@ -42,6 +42,31 @@
 # Maximum number of documents requested per call
 # max_results = 1000
 
+[download]
+# Rename downloaded files with regular expressions, applied to each file
+# *stem* (the extension is kept) in the order listed. Unlike ameli-cli, the
+# file names come from the vault content (Digiposte does not dictate them),
+# so the rules are yours to express: match/replace pairs using Python `re`
+# syntax (back-references \1, \g<name>, …).
+#
+# Example — a file whose whole name is "BULLETIN DE PAIE 02_2026.pdf"
+# (month first, ALL CAPS from the sender). Rename it to a normal, readable
+# name that sorts chronologically — "Bulletin de paie 2026-02.pdf" — by
+# spelling the complete name in both the pattern and the replacement:
+#   rename_rules = [
+#     { pattern = '(?i)^BULLETIN DE PAIE (0[1-9]|1[0-2])_([0-9]{4})$', replacement = 'Bulletin de paie \2-\1' },
+#   ]
+# A shorter rule only reorders a trailing "MM_YYYY" date token (the prefix
+# the vault gave is kept as-is, e.g. "BULLETIN DE PAIE 2026-02"):
+#   rename_rules = [
+#     { pattern = '(0[1-9]|1[0-2])_([0-9]{4})$', replacement = '\2-\1' },
+#   ]
+# Note: each rule is an inline table and must stay on a single line. Prefer
+# single-quoted strings: in double-quoted TOML strings a backslash must be
+# escaped ("\\d", "\\1"). Files downloaded before these rules existed are
+# renamed automatically on the next `sync` (not downloaded again).
+# rename_rules = []
+
 [log]
 # Logging level: DEBUG, INFO, WARNING, ERROR
 # level = "INFO"

@@ -45,10 +45,10 @@ src/digiposte_cli/
 | --- | --- |
 | `cli.py` | Parses args, validates them (`CliOptions`), bootstraps config/logging/paths, runs each subcommand, maps errors to exit codes. |
 | `config.py` | Resolves the config path, writes the template if missing, parses/validates the TOML (`tomllib` + `ConfigFile`), returns an effective `Config` dataclass with defaults already resolved. |
-| `schemas.py` | Central validation of every external value (config sections `AuthFile`, `PlaywrightFile`, `ApiFile`, `LogFile`, `PathsFile`, `ConfigFile`; CLI `CliOptions`). `extra="forbid"` rejects unknown keys. |
+| `schemas.py` | Central validation of every external value (config sections `AuthFile`, `PlaywrightFile`, `ApiFile`, `DownloadFile`, `LogFile`, `PathsFile`, `ConfigFile`; CLI `CliOptions`). `extra="forbid"` rejects unknown keys. |
 | `paths.py` | Pure XDG resolution (data/state/cache homes, `~/Documents`); no application state in the source tree. |
 | `auth.py` | Token cache (load/save), the two browser login paths, cookie → API-token fetch. |
-| `api.py` | `DigiposteAPI` client: per-location listing, document download, file-name sanitization. |
+| `api.py` | `DigiposteAPI` client: per-location listing, document download, file-name naming (sanitization + `[download] rename_rules` applied to the stem, legacy-file rename). |
 
 ## 3. Configuration subsystem
 
@@ -74,7 +74,12 @@ config.toml   → ConfigFile (pydantic)      ─┘        │
   trailing newline) is the value. Failure → warning + empty value.
 - `Config` is a plain `@dataclass` with built-in defaults; `locations` defaults
   to `["SAFE", "INBOX"]`, `max_results` to 1000 (pydantic-constrained to
-  `1..100_000`).
+  `1..100_000`); `rename_rules` defaults to `[]`.
+- `[download] rename_rules` (a `list` of `{pattern, replacement}`) holds regex
+  substitutions applied to downloaded file names. Each rule is validated when
+  the config is read: `re.compile(pattern)` + a dry-run `re.sub` on an empty
+  string (which parses the replacement template, catching bad back-references
+  like `\2` on a single-group pattern) → `ConfigurationError` otherwise.
 
 ## 4. Path resolution (`paths.py`)
 
@@ -204,7 +209,16 @@ Details:
   `{results|documents|items|hits|content: [...]}`).
 - **File names**: `_safe_filename` sanitizes title/name/subtitle (illegal
   filename characters → `_`, whitespace collapsed) and appends the extension if
-  missing.
+  missing. Because the names come from the vault content (not the API), the
+  on-disk name is finalized by `file_name_for(doc)` = `_safe_filename(doc)`
+  then `_apply_rename_rules`, which applies the configured `[download]`
+  `rename_rules` (compiled `(pattern, replacement)` pairs) **in order** to the
+  file *stem* (everything before the last `.` extension, so `$`-anchored
+  patterns don't have to account for the extension). `legacy_file_names_for`
+  returns the pre-rules name (the raw sanitized name) and `rename_legacy`
+  renames an on-disk file found under that name to the current one — mirroring
+  ameli-cli, so files downloaded before the rules existed are not downloaded
+  twice.
 - **Download**: `download_document()` streams `GET /document/{id}/content`
   (120 s timeout, 64 KiB chunks) into `<destination>/<file name>`.
 - HTTP 401 → clear hint to run `digiposte-cli login`.
@@ -222,8 +236,12 @@ Details:
 4. **Step 3 — download**: create the base dir **and one sub-folder per
    configured location** (even empty ones, so the tree mirrors the config),
    then for each document compute `dest = <base>/<location>` (fallback `MISC`)
-   and skip it when `<dest>/<file_name>` already exists (filename-only skip);
-   otherwise download.
+   and `file_name = api.file_name_for(doc)` (canonical, after the
+   `[download] rename_rules`): skip it when `<dest>/<file_name>` already exists
+   (filename-only skip); else try `api.rename_legacy(doc, dest)` — a file left
+   under the pre-rules (un-renamed) name is renamed to the canonical one and
+   counted as `renamed`; else download under the canonical name. Final report:
+   downloaded vs renamed vs already present.
 
 `list` (`ls`) prints `label\tid` per document (or the raw JSON on stdout with
 `--json`). `login` is idempotent (valid cache → message, no browser). `logout`
