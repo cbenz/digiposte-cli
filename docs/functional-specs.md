@@ -62,7 +62,7 @@ scriptable backup of their own documents on their own machine.
 | Command | Purpose | Specific options |
 | --- | --- | --- |
 | `sync` | Authenticate, then list and download the documents of the configured locations. | `--download-dir DIR` |
-| `list` (`ls`) | Authenticate and print the document list (label + id per line) without downloading. | `--json` (raw JSON on stdout) |
+| `list` (`ls`) | Authenticate and print the document list **as a tree** (one branch per location, sorted by metadata date / file name / size, a check mark for documents already on disk) without downloading. | `--json` (raw JSON on stdout), `--sort {date,name,size}`, `--reverse` |
 | `login` | Ensure a valid token. Already valid → just reports it (no browser). Otherwise silent refresh, or a visible browser login. | — |
 | `logout` | Delete the cached token. | `--reset` (also delete the browser profiles — full sign-out) |
 | `status` | Show configuration and authentication state (no network). | — |
@@ -77,6 +77,35 @@ scriptable backup of their own documents on their own machine.
 | `--use-running-chrome` | Force the dedicated-Chrome (CDP) login path — already the default; only meaningful to force it on when disabled in the config. |
 | `--headless` | Run the browser without a window (only useful when already authenticated). |
 | `--verbose` | Debug logging. |
+
+### `list` output
+
+`list` (`ls`) prints an interactive-style tree on **stdout**:
+
+```
+~/Documents/digiposte (13 document(s))
+├── SAFE (0)
+└── INBOX (13)
+    ├── ✓ Bulletin de paie 2026-08.pdf  259.2 KB  2026-09-04
+    └── ✗ Bulletin de paie 2026-07.pdf  260.0 KB  2026-07-30
+```
+
+- The root is the download directory (home shortened to `~`); each branch is a
+  configured location (empty locations are shown with a `(0)` count).
+- Each line shows the **file name `sync` writes** (title + extension, then
+  `[download] rename_rules`), its **size** and its **metadata date** — the same
+  file name used for the check mark and for `--sort name`.
+- `--sort date|name|size` selects the sort key (default `date`), `--reverse`
+  flips the order. Natural order: `date` newest first, `name` A→Z, `size`
+  largest first. The `date` key reads `creation_date` — the field actually
+  returned by the listing routes — then `publishedOrCreationDate`,
+  `publishedAt`, `createdAt`, `timestamp`, `updatedAt` (first one present);
+  **no file name is parsed**, so the date order does not depend on
+  `[download] rename_rules`. Documents without a usable date/size are listed
+  last.
+- The check mark shows whether the document is already on disk in its location
+  folder (`✓` present, `✗` missing) — the same rule as `sync`.
+- Document ids are only in `--json` (raw API payload, sorted the same way).
 
 ## 6. Download layout
 

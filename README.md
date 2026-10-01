@@ -72,7 +72,9 @@ digiposte-cli status
 # List the documents (both names work)
 digiposte-cli list
 digiposte-cli ls
-digiposte-cli list --json     # raw JSON on stdout
+digiposte-cli ls --sort name          # sort by file name (A→Z)
+digiposte-cli ls --sort size --reverse # smallest first
+digiposte-cli list --json     # raw JSON on stdout (includes the document ids)
 
 # Authenticate then download everything (into <base>/<LOCATION>/…)
 digiposte-cli sync
@@ -91,6 +93,39 @@ digiposte-cli config --init       # write the default template if missing
 Global options (usable on any command): `--config PATH`,
 `--playwright-channel CHANNEL`, `--use-running-chrome` (force the Chrome/CDP
 login, which is the default), `--headless`, `--verbose`.
+
+## Listing (`list` / `ls`)
+
+The list is printed as a **tree**: the download directory as the root, one
+branch per configured location (`SAFE`, `INBOX`… — empty ones are shown too)
+and one line per document:
+
+```
+~/Documents/digiposte (13 document(s))
+├── SAFE (0)
+└── INBOX (13)
+    ├── ✓ Bulletin de paie 2026-08.pdf  259.2 KB  2026-09-04
+    └── ✗ Bulletin de paie 2026-07.pdf  260.0 KB  2026-07-30
+```
+
+- Each line shows the **file name that `sync` writes** — the vault title +
+  extension, then the [`[download] rename_rules`](#file-name-renaming-download-rename_rules)
+  applied — so the tree reads exactly like the folder on disk (the raw vault
+  title is not shown). It is the same value used by the `✓`/`✗` check mark and
+  by `--sort name`.
+- The check mark tells whether the document is **already on disk** in its
+  location folder (`✓` present, `✗` missing), using the same rule as `sync`.
+- The **size** and the **metadata date** complete the line. The date is the
+  `creation_date` field returned by the listing routes (falling back to
+  `publishedOrCreationDate` / `publishedAt` / `createdAt` / … on the detail
+  schema), formatted `YYYY-MM-DD`.
+- `--sort date|name|size` selects the sort key (default `date`; natural order:
+  `date` = newest first, `name` = A→Z, `size` = largest first) and `--reverse`
+  flips it. The default `date` sort uses the metadata date above, never the
+  file name, so it does not depend on the rename rules. Documents without a
+  date/size are listed last.
+- Document ids are not printed in the tree; use `list --json` for the raw API
+  payload (ids included), sorted the same way.
 
 ## Download layout
 

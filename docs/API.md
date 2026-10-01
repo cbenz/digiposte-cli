@@ -69,6 +69,15 @@ Useful endpoints for a vault backup:
 > The `/documents/search` POST endpoint documented in older revisions answers
 > an empty/`404` result and is **not** used.
 
+> ⚠️ **Two response shapes.** The `Document` schema in the swagger (and the
+> `/document/{id}` detail route) is **camelCase** (`createdAt`, `extension`,
+> `title`, `location`, `publishedOrCreationDate`…), but the `/documents/{location}`
+> **listing** routes answer a **lighter, snake_case** shape (`creation_date`,
+> `extension`, `filename`, `location`, `title`, `size`, `valid_until`, `nature_*`,
+> `sender_*`…). In particular the listing has **no `createdAt`** — the date to
+> use for sorting is **`creation_date`**. `render.document_date` therefore checks
+> `creation_date` first, then the camelCase detail fields.
+
 Expected headers: `Authorization: Bearer`, `X-API-VERSION-MINOR: 2`,
 `Accept: application/json`, `Content-Type: application/json`.
 

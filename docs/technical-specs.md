@@ -20,6 +20,7 @@ the code. Read it together with:
 | HTTP | `requests` (Bearer-authenticated API + CDP health probes) |
 | Browser | `playwright` — **attach over CDP** only (never used to launch the anti-CAPTCHA Chrome) |
 | Data validation | pydantic v2 (`BaseModel`, `extra="forbid"` for the config) |
+| Rendering | `rich` (the `list` per-location tree; colors disabled automatically when stdout is not a terminal) |
 | Build | `uv_build` backend; project managed with `uv`; entry point `digiposte-cli = digiposte_cli.cli:main` (`pyproject.toml`) |
 | Lint/type | `ruff` (line-length 100), basedpyright standard mode |
 
@@ -35,6 +36,7 @@ src/digiposte_cli/
 ├── paths.py           # XDG path resolution
 ├── auth.py            # browser authentication + token cache
 ├── api.py             # Digiposte v3 HTTP client
+├── render.py          # `list` tree rendering (name/date/size sort, check marks)
 └── assets/
     └── config.toml    # shipped template (importlib.resources)
 ```
@@ -48,7 +50,8 @@ src/digiposte_cli/
 | `schemas.py` | Central validation of every external value (config sections `AuthFile`, `PlaywrightFile`, `ApiFile`, `DownloadFile`, `LogFile`, `PathsFile`, `ConfigFile`; CLI `CliOptions`). `extra="forbid"` rejects unknown keys. |
 | `paths.py` | Pure XDG resolution (data/state/cache homes, `~/Documents`); no application state in the source tree. |
 | `auth.py` | Token cache (load/save), the two browser login paths, cookie → API-token fetch. |
-| `api.py` | `DigiposteAPI` client: per-location listing, document download, file-name naming (sanitization + `[download] rename_rules` applied to the stem, legacy-file rename). |
+| `api.py` | `DigiposteAPI` client: per-location listing, document download, file-name naming (sanitization + `[download] rename_rules` applied to the stem, legacy-file rename), and the on-disk presence check (`is_downloaded`). |
+| `render.py` | Presentation of the document list (`rich`): metadata-date extraction + sort (date/name/size, `--reverse`), size formatting, and the per-location tree with the downloaded/missing check marks. |
 
 ## 3. Configuration subsystem
 
@@ -252,9 +255,28 @@ Details:
    to rename leftover files whose document is no longer listed by the vault.
    Final report: downloaded vs renamed vs already present.
 
-`list` (`ls`) prints `label\tid` per document (or the raw JSON on stdout with
-`--json`). `login` is idempotent (valid cache → message, no browser). `logout`
-removes the token; `--reset` also `shutil.rmtree`s both profiles.
+`list` (`ls`) fetches the documents, sorts them by the selected `--sort` key
+(`render.sort_documents`, `--reverse` flips the natural direction):
+`date` (default, newest first) reads `creation_date` — the listing routes
+answer a snake_case shape distinct from the camelCase `Document` schema of the
+swagger — then `publishedOrCreationDate`, `publishedAt`, `createdAt`,
+`timestamp`, `updatedAt` (first present, normalized to naive UTC; undated
+last); `name` sorts the file names A→Z; `size` sorts bytes, largest first. It
+groups them by location and asks `api.is_downloaded(doc, download_dir)` for
+each (canonical name or a pre-rules legacy name present in
+`<base>/<location>`). `render.render_document_tree` then prints the `rich` tree
+(root = download dir, home shortened to `~` via `paths.display_path`, one
+branch per configured location — empty ones included — one leaf per document).
+Each leaf shows the **file name `sync` writes** (`api.file_name_for`, i.e. the
+vault title + extension with the `[download] rename_rules` applied — not the
+raw title, so the tree matches the on-disk folder and the same value drives
+`--sort name` and the presence check), then its human-readable size and its
+metadata date, and a `✓`/`✗` check mark. The column alignment is computed on
+the raw names, which are `rich.markup`-escaped, so a literal `[` in a file name
+is printed as-is. With `--json`, the same sorted documents are dumped raw (ids
+included) instead of the tree. `login` is idempotent (valid cache → message, no
+browser). `logout` removes the token; `--reset` also `shutil.rmtree`s both
+profiles.
 
 ### Logging
 

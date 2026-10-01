@@ -41,6 +41,14 @@ from digiposte_cli.config import (
     create_default_config,
     load_config,
 )
+from digiposte_cli.render import (
+    SORT_KEYS,
+    DocumentEntry,
+    document_date,
+    document_size,
+    render_document_tree,
+    sort_documents,
+)
 from digiposte_cli.schemas import CliOptions
 
 log = logging.getLogger("digiposte")
@@ -159,6 +167,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_list.add_argument(
         "--json", action="store_true", help="Output the document list as JSON on stdout"
     )
+    p_list.add_argument(
+        "--sort",
+        choices=list(SORT_KEYS),
+        default="date",
+        help="Sort documents by this field (default: date). Natural order: "
+        "date = newest first, name = A→Z (file name), size = largest first.",
+    )
+    p_list.add_argument("--reverse", action="store_true", help="Reverse the sort order")
     p_list.set_defaults(func=cmd_list)
 
     sub.add_parser(
@@ -210,7 +226,7 @@ def _bootstrap_config(opts: CliOptions) -> tuple[Config, Path]:
 
     level_name = "DEBUG" if opts.verbose else cfg.log_level
     _setup_logging(level_name)
-    log.info("📄 Config: %s", config_path)
+    log.info("📄 Config: %s", paths.display_path(config_path))
     return cfg, config_path
 
 
@@ -341,7 +357,7 @@ def cmd_sync(opts: CliOptions) -> None:
         log.info("=" * 50)
         download_dir = ctx["download_dir"]
         download_dir.mkdir(parents=True, exist_ok=True)
-        log.info("📁 Base dir: %s", download_dir.resolve())
+        log.info("📁 Base dir: %s", paths.display_path(download_dir.resolve()))
         # Explicitly create one sub-folder per configured location (even when
         # empty), so the tree always mirrors the config.
         for location in api.locations:
@@ -360,7 +376,7 @@ def cmd_sync(opts: CliOptions) -> None:
         skipped = 0
         renamed = 0
         for doc in documents:
-            location = (doc.get("location") or "MISC").strip()
+            location = api.location_of(doc)
             dest = download_dir / location
             file_name = api.file_name_for(doc)
             path = dest / file_name
@@ -390,7 +406,7 @@ def cmd_sync(opts: CliOptions) -> None:
             downloaded,
             renamed,
             skipped,
-            download_dir.resolve(),
+            paths.display_path(download_dir.resolve()),
         )
     finally:
         api.close()
@@ -407,8 +423,29 @@ def cmd_list(opts: CliOptions) -> None:
         raise SystemExit(1)
 
     api = _build_api(auth, cfg)
+    download_dir = ctx["download_dir"]
+    locations = list(api.locations)
     try:
-        documents = api.list_documents()
+        # Sort the documents and regroup them by location; each document is
+        # checked against the download dir so the tree can flag the ones
+        # already on disk. The displayed (and `--sort name`) value is the file
+        # name `sync` writes — rename rules applied — not the vault title.
+        documents = sort_documents(
+            api.list_documents(),
+            sort_key=opts.sort,
+            reverse=opts.reverse,
+            name_of=api.file_name_for,
+        )
+        entries_by_location: dict[str, list[DocumentEntry]] = {}
+        for doc in documents:
+            entries_by_location.setdefault(api.location_of(doc), []).append(
+                DocumentEntry(
+                    name=api.file_name_for(doc),
+                    date=document_date(doc),
+                    size=document_size(doc),
+                    downloaded=api.is_downloaded(doc, download_dir),
+                )
+            )
     finally:
         api.close()
 
@@ -417,11 +454,11 @@ def cmd_list(opts: CliOptions) -> None:
         sys.stdout.write("\n")
         return
 
-    for doc in documents:
-        title = doc.get("title")
-        doc_id = doc.get("id")
-        label = title if isinstance(title, str) and title else doc_id
-        print(f"{label}\t{doc_id}")
+    render_document_tree(
+        entries_by_location,
+        download_dir=download_dir,
+        locations=locations,
+    )
 
 
 def cmd_login(opts: CliOptions) -> None:
@@ -463,11 +500,11 @@ def cmd_logout(opts: CliOptions) -> None:
                 removed.append(str(profile))
 
     if removed:
-        log.info("🗑️  Removed: %s", ", ".join(removed))
+        log.info("🗑️  Removed: %s", ", ".join(paths.display_path(p) for p in removed))
     elif opts.reset:
         log.info("ℹ️  Already signed out — nothing to remove.")
     else:
-        log.info("ℹ️  No cached token to remove (%s).", cache_path)
+        log.info("ℹ️  No cached token to remove (%s).", paths.display_path(cache_path))
 
 
 def cmd_status(opts: CliOptions) -> None:
@@ -475,21 +512,21 @@ def cmd_status(opts: CliOptions) -> None:
     cfg, config_path = _bootstrap_config(opts)
     cache_path = cfg.token_cache or paths.token_cache_path()
 
-    print(f"Config file:     {config_path}")
+    print(f"Config file:     {paths.display_path(config_path)}")
     print(f"Login URL:       {cfg.login_url}")
     print(f"Channel:         {cfg.playwright_channel}  (headless: {cfg.headless})")
     debug_profile = cfg.debug_profile_dir or paths.debug_profile_dir()
     if cfg.use_running_chrome:
-        print(f"Own Chrome (CDP):  yes (dedicated profile: {debug_profile})")
+        print(f"Own Chrome (CDP):  yes (dedicated profile: {paths.display_path(debug_profile)})")
     else:
         print("Own Chrome (CDP):  no (Playwright profile)")
     print(f"API base URL:    {cfg.api_base_url}")
     print(
         f"Locations:       {', '.join(cfg.locations or ['SAFE', 'INBOX'])}  (max: {cfg.max_results})"
     )
-    print(f"Download dir:    {cfg.download_dir or paths.download_dir()}")
-    print(f"Profile dir:     {cfg.profile_dir or paths.profile_dir()}")
-    print(f"Token cache:     {cache_path}")
+    print(f"Download dir:    {paths.display_path(cfg.download_dir or paths.download_dir())}")
+    print(f"Profile dir:     {paths.display_path(cfg.profile_dir or paths.profile_dir())}")
+    print(f"Token cache:     {paths.display_path(cache_path)}")
 
     auth = load_token_cache(cache_path)
     if auth is None:
@@ -505,10 +542,10 @@ def cmd_config(opts: CliOptions) -> None:
     config_path = opts.config or DEFAULT_CONFIG_FILE
     if opts.init:
         if create_default_config(config_path):
-            log.info("📄 Wrote a default template to %s", config_path)
+            log.info("📄 Wrote a default template to %s", paths.display_path(config_path))
         else:
-            log.info("ℹ️  Config file already exists: %s", config_path)
-    print(config_path)
+            log.info("ℹ️  Config file already exists: %s", paths.display_path(config_path))
+    print(paths.display_path(config_path))
 
 
 # ── Entry point ────────────────────────────────────────────────────────

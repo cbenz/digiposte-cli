@@ -159,4 +159,7 @@ class CliOptions(BaseModel):
     verbose: bool = False
     # CLI flag `--json` is aliased to avoid clashing with BaseModel.json()
     as_json: bool = Field(default=False, validation_alias="json")
+    # `list` only: sort key and direction (see render.SORT_KEYS).
+    sort: Literal["date", "name", "size"] = "date"
+    reverse: bool = False
     init: bool = False

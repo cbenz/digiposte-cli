@@ -54,3 +54,15 @@ def debug_profile_dir() -> Path:
 def token_cache_path() -> Path:
     """API token cache (reusable authentication state, valid ~1 h)."""
     return xdg_state_home() / _APP / "token.json"
+
+
+def display_path(path: Path | str) -> str:
+    """Shorten a path for display by replacing the home directory with `~`
+    (`/home/alice/Documents` → `~/Documents`, the home itself → `~`). Paths
+    outside the home directory are returned unchanged."""
+    home = _home()
+    try:
+        relative = Path(path).expanduser().relative_to(home)
+    except ValueError:
+        return str(path)
+    return "~" if not relative.parts else f"~/{relative}"

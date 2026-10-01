@@ -163,6 +163,22 @@ class DigiposteAPI:
         stem. Used both to download and to locate it on disk."""
         return self._apply_rename_rules(self._safe_filename(doc))
 
+    @staticmethod
+    def location_of(doc: dict[str, Any]) -> str:
+        """Location folder of a document (e.g. "SAFE"); "MISC" when the API
+        provides none. The listing sets it, and `sync` mirrors it on disk."""
+        return (doc.get("location") or "MISC").strip()
+
+    def is_downloaded(self, doc: dict[str, Any], download_dir: Path) -> bool:
+        """Whether the document is already on disk in its location folder.
+
+        Mirrors the `sync` skip rule: the canonical name (after the rename
+        rules) or a pre-rules legacy name makes the document "already
+        present". Used by `list` to show the per-document check mark."""
+        destination = download_dir / self.location_of(doc)
+        names = {self.file_name_for(doc), *self.legacy_file_names_for(doc)}
+        return any((destination / name).exists() for name in names)
+
     def _apply_rename_rules(self, file_name: str) -> str:
         """Apply the configured rename_rules to a file name, in order.
 
